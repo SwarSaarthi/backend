@@ -20,6 +20,9 @@ class Settings(BaseSettings):
     JWT_ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440  # 24 hours
 
+    # ── Hugging Face Token (for gated models like ai4bharat/indicwav2vec-hindi) ────
+    HF_TOKEN: str = ""
+
     # ── CORS ──────────────────────────────────────────────────
     CORS_ORIGINS: list[str] = [
         "http://localhost:3000",
