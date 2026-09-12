@@ -24,7 +24,7 @@ class Settings(BaseSettings):
     HF_TOKEN: str = ""
 
     # ── CORS ──────────────────────────────────────────────────
-    CORS_ORIGINS: list[str] = [
+    CORS_ORIGINS: list[str] = [ 
         "http://localhost:3000",
         "http://127.0.0.1:3000",
     ]
