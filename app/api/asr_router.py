@@ -159,6 +159,10 @@ async def asr_predict(
             "accuracy_score": accuracy,
             "cer": analysis["cer"],
             "is_correct": is_correct,
+            "feedback_tier": analysis.get(
+                "feedback_tier",
+                "excellent" if is_correct else ("almost_there" if accuracy >= 50.0 else "needs_improvement")
+            ),
             "feedback": analysis["feedback"],
             "details": analysis["details"],
             "needs_focus": progress.needs_focus,

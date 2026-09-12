@@ -577,27 +577,19 @@ def analyze_pronunciation(
     # -----------------------------------------------------
 
     if not prediction:
-
         return {
-
             "target": target,
-
             "prediction": "",
-
             "cer": 1.0,
-
             "accuracy_score": 0.0,
-
             "is_correct": False,
-
-            "feedback":
+            "feedback_tier": "needs_improvement",
+            "feedback": (
                 "No speech detected. "
-                "Please try recording again.",
-
+                "Please speak clearly into the microphone and try recording again."
+            ),
             "details": {
-
                 "cer_based_score": 0.0
-
             }
         }
 
@@ -639,36 +631,26 @@ def analyze_pronunciation(
     )
 
     # =====================================================
-    # Feedback
+    # Feedback Tiers:
+    # 1. Excellent: score >= 80% (is_correct)
+    # 2. Almost There: 50% <= score < 80%
+    # 3. Needs Improvement: score < 50%
     # =====================================================
 
     if is_correct:
-
+        feedback_tier = "excellent"
         feedback = (
-            "Excellent! Your pronunciation is correct."
+            "Excellent! Your pronunciation is accurate."
         )
-
-    elif error_rate <= 0.35:
-
+    elif accuracy_score >= 50.0:
+        feedback_tier = "almost_there"
         feedback = (
-            "Almost correct! "
-            "Try pronouncing the word again."
+            "Good attempt! Listen carefully to the reference audio and try again."
         )
-
-    elif error_rate <= 0.50:
-
-        feedback = (
-            "Good attempt! "
-            "Listen to the correct pronunciation "
-            "and try again."
-        )
-
     else:
-
+        feedback_tier = "needs_improvement"
         feedback = (
-            "The pronunciation needs improvement. "
-            "Listen to the correct pronunciation "
-            "and try again slowly."
+            "The pronunciation needs improvement. Listen to the reference audio carefully and try speaking slowly."
         )
 
     # =====================================================
@@ -676,26 +658,17 @@ def analyze_pronunciation(
     # =====================================================
 
     return {
-
         "target": target,
-
         "prediction": prediction,
-
         "cer": round(
             error_rate,
             3
         ),
-
         "accuracy_score": accuracy_score,
-
         "is_correct": is_correct,
-
+        "feedback_tier": feedback_tier,
         "feedback": feedback,
-
         "details": {
-
-            "cer_based_score":
-                accuracy_score
-
+            "cer_based_score": accuracy_score
         }
     }
