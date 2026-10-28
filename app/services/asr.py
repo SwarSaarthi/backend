@@ -30,16 +30,25 @@ import logging
 import tempfile
 import subprocess
 from typing import Optional
+import numpy as np
 
 import torch
 import torchaudio
 
 from transformers import (
     AutoProcessor,
-    AutoModelForCTC
+    AutoModelForCTC,
+    WhisperProcessor,
+    WhisperForConditionalGeneration,
+    logging as hf_logging,
 )
 
+# Silence internal deprecation and tokenizer cleanup warnings from Transformers
+hf_logging.set_verbosity_error()
+
 from jiwer import cer as compute_cer
+
+from app.config import settings
 
 
 # ---------------------------------------------------------
@@ -54,6 +63,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------
 
 MODEL_ID = "ai4bharat/indicwav2vec-hindi"
+FALLBACK_MODEL_ID = "openai/whisper-tiny"
 
 TARGET_SAMPLE_RATE = 16_000
 
@@ -64,6 +74,8 @@ TARGET_SAMPLE_RATE = 16_000
 
 _processor: Optional[AutoProcessor] = None
 _model: Optional[AutoModelForCTC] = None
+_whisper_processor: Optional[WhisperProcessor] = None
+_whisper_model: Optional[WhisperForConditionalGeneration] = None
 _device: Optional[torch.device] = None
 
 _model_loaded = False
@@ -75,14 +87,14 @@ _model_loaded = False
 
 def load_model() -> None:
     """
-    Load the IndicWav2Vec Hindi model.
-
-    The model is loaded only once and kept in memory so that
-    every prediction request can reuse the same model.
+    Load the IndicWav2Vec Hindi model (primary) and
+    pre-load the OpenAI Whisper model (fallback).
     """
 
     global _processor
     global _model
+    global _whisper_processor
+    global _whisper_model
     global _device
     global _model_loaded
 
@@ -127,7 +139,7 @@ def load_model() -> None:
     #
     # -----------------------------------------------------
 
-    hf_token = os.getenv("HF_TOKEN")
+    hf_token = settings.HF_TOKEN or os.getenv("HF_TOKEN")
 
     if hf_token:
 
@@ -197,6 +209,17 @@ def load_model() -> None:
 
     _model.eval()
 
+    # Pre-load Whisper fallback model
+    try:
+        logger.info("Loading fallback Whisper model (%s)...", FALLBACK_MODEL_ID)
+        _whisper_processor = WhisperProcessor.from_pretrained(FALLBACK_MODEL_ID)
+        _whisper_model = WhisperForConditionalGeneration.from_pretrained(FALLBACK_MODEL_ID)
+        _whisper_model.to(_device)
+        _whisper_model.eval()
+        logger.info("Fallback Whisper model ready on %s", _device)
+    except Exception as e:
+        logger.warning("Could not pre-load Whisper fallback: %s", e)
+
     _model_loaded = True
 
     logger.info(
@@ -215,6 +238,56 @@ def is_model_loaded() -> bool:
     """
 
     return _model_loaded
+
+
+# =========================================================
+# WHISPER FALLBACK INFERENCE
+# =========================================================
+
+def predict_with_whisper(audio: "np.ndarray") -> str:
+    """
+    Run OpenAI Whisper inference in Hindi as fallback when
+    IndicWav2Vec produces empty output or encounters an error.
+    """
+    global _whisper_processor, _whisper_model, _device
+    import numpy as np
+
+    try:
+        if _whisper_processor is None or _whisper_model is None:
+            logger.info("Loading fallback Whisper model (%s)...", FALLBACK_MODEL_ID)
+            _whisper_processor = WhisperProcessor.from_pretrained(FALLBACK_MODEL_ID)
+            _whisper_model = WhisperForConditionalGeneration.from_pretrained(FALLBACK_MODEL_ID)
+            _whisper_model.to(_device)
+            _whisper_model.eval()
+
+        inputs = _whisper_processor(
+            audio,
+            sampling_rate=TARGET_SAMPLE_RATE,
+            return_tensors="pt"
+        )
+        input_features = inputs.input_features.to(_device)
+
+        with torch.no_grad():
+            predicted_ids = _whisper_model.generate(
+                input_features,
+                language="hindi",
+                task="transcribe"
+            )
+
+        transcription = _whisper_processor.batch_decode(
+            predicted_ids,
+            skip_special_tokens=True,
+            clean_up_tokenization_spaces=False,
+        )[0]
+
+        # Clean punctuation and extra whitespace
+        cleaned = "".join(ch for ch in transcription if ch not in ".,!?-।|:;\"'()[]{}")
+        cleaned = " ".join(cleaned.strip().split())
+        return cleaned
+    except Exception as e:
+        logger.error("Whisper fallback inference failed: %s", e)
+        return ""
+
 
 
 # =========================================================
@@ -378,6 +451,24 @@ def predict_audio(audio_path: str) -> str:
         # -------------------------------------------------
 
         audio = waveform.squeeze().numpy()
+        import numpy as np
+
+        max_amp = float(np.max(np.abs(audio))) if len(audio) > 0 else 0.0
+        rms = float(np.sqrt(np.mean(audio**2))) if len(audio) > 0 else 0.0
+
+        logger.info(
+            "Audio metrics: duration=%.2fs, max_amp=%.4f, rms=%.4f",
+            len(audio) / TARGET_SAMPLE_RATE,
+            max_amp,
+            rms
+        )
+
+        if max_amp < 0.003:
+            logger.warning(
+                "Audio is silent (max_amp=%.4f < 0.003). Returning empty prediction.",
+                max_amp
+            )
+            return ""
 
         # -------------------------------------------------
         # Processor
@@ -506,9 +597,24 @@ def predict_audio(audio_path: str) -> str:
         prediction = " ".join(prediction.strip().split())
 
         logger.info(
-            "ASR Prediction: %s",
+            "IndicWav2Vec Prediction: '%s'",
             prediction
         )
+
+        # -------------------------------------------------
+        # Whisper Fallback
+        # -------------------------------------------------
+        # If IndicWav2Vec returned empty text on audible audio (e.g. casual laptop speech),
+        # run OpenAI Whisper to capture the spoken word!
+        if not prediction and max_amp >= 0.003:
+            logger.info(
+                "IndicWav2Vec produced empty text for audible audio (max_amp=%.4f). Running Whisper fallback...",
+                max_amp
+            )
+            whisper_pred = predict_with_whisper(audio)
+            if whisper_pred:
+                logger.info("Whisper fallback captured: '%s'", whisper_pred)
+                return whisper_pred
 
         return prediction
 
