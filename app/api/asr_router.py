@@ -22,6 +22,7 @@ from app.models.user import User
 from app.models.word import Word
 from app.models.practice import PracticeSession, UserWordProgress, UserStreak
 from app.services.asr import predict_audio, analyze_pronunciation, is_model_loaded
+from app.services.gemini_feedback import generate_pronunciation_feedback
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +33,7 @@ router = APIRouter(prefix="/api/asr", tags=["asr"])
 async def asr_predict(
     audio: UploadFile = File(..., description="Audio recording (WebM/WAV/OGG)"),
     word_id: str = Form(..., description="Target word UUID from the words table"),
+    feedback_language: str = Form("en", description="Feedback language: 'en' or 'hi'"),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -150,7 +152,21 @@ async def asr_predict(
         await db.commit()
         await db.refresh(practice_session)
 
-        # ── 8. Return response ───────────────────────────────────
+        # ── 8. Generate Gemini AI pronunciation coaching ─────
+        gemini_suggestion = None
+        try:
+            gemini_suggestion = await generate_pronunciation_feedback(
+                target_text=word.text_hi,
+                user_spoken_text=prediction_text,
+                accuracy_score=accuracy,
+                cer=analysis["cer"],
+                transliteration=word.transliteration or "",
+                feedback_language=feedback_language,
+            )
+        except Exception as e:
+            logger.warning("Gemini feedback generation failed (non-blocking): %s", e)
+
+        # ── 9. Return response ───────────────────────────────────
         return {
             "session_id": practice_session.id,
             "word_id": word.id,
@@ -167,6 +183,8 @@ async def asr_predict(
             "details": analysis["details"],
             "needs_focus": progress.needs_focus,
             "streak": today_streak.words_practiced_count,
+            "gemini_suggestion": gemini_suggestion,
+            "feedback_language": feedback_language,
         }
 
     except HTTPException:

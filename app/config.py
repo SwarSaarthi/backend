@@ -23,6 +23,9 @@ class Settings(BaseSettings):
     # ── Hugging Face Token (for gated models like ai4bharat/indicwav2vec-hindi) ────
     HF_TOKEN: str = ""
 
+    # ── Google Gemini API Key (for AI pronunciation feedback) ─
+    SWAR_GOOGLE_KEY: str = ""
+
     # ── CORS ──────────────────────────────────────────────────
     CORS_ORIGINS: list[str] = [ 
         "http://localhost:3000",

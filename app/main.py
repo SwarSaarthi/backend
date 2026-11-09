@@ -17,6 +17,7 @@ from app.api.words import router as words_router
 from app.api.practice import router as practice_router
 from app.api.profile import router as profile_router
 from app.api.asr_router import router as asr_router
+from app.api.tts_router import router as tts_router
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +65,7 @@ app.include_router(words_router)
 app.include_router(practice_router)
 app.include_router(profile_router)
 app.include_router(asr_router)
+app.include_router(tts_router)
 
 
 @app.get("/api/health", tags=["health"])
