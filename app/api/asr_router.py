@@ -10,6 +10,7 @@ POST /api/asr/predict
 import os
 import tempfile
 import logging
+import base64
 from datetime import date, datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, status
@@ -23,6 +24,7 @@ from app.models.word import Word
 from app.models.practice import PracticeSession, UserWordProgress, UserStreak
 from app.services.asr import predict_audio, analyze_pronunciation, is_model_loaded
 from app.services.gemini_feedback import generate_pronunciation_feedback
+from app.services.tts_service import synthesize_speech
 
 logger = logging.getLogger(__name__)
 
@@ -154,6 +156,7 @@ async def asr_predict(
 
         # ── 8. Generate Gemini AI pronunciation coaching ─────
         gemini_suggestion = None
+        feedback_audio_data = None
         try:
             gemini_suggestion = await generate_pronunciation_feedback(
                 target_text=word.text_hi,
@@ -163,10 +166,24 @@ async def asr_predict(
                 transliteration=word.transliteration or "",
                 feedback_language=feedback_language,
             )
+
+            # ── 9. Pre-synthesize TTS audio on backend for instant frontend playback ──
+            if gemini_suggestion:
+                try:
+                    audio_bytes = await synthesize_speech(
+                        text=gemini_suggestion,
+                        lang=feedback_language,
+                        speed=0.85,
+                    )
+                    if audio_bytes:
+                        b64 = base64.b64encode(audio_bytes).decode("utf-8")
+                        feedback_audio_data = f"data:audio/mpeg;base64,{b64}"
+                except Exception as tts_err:
+                    logger.warning("Backend TTS pre-synthesis failed (non-blocking): %s", tts_err)
         except Exception as e:
             logger.warning("Gemini feedback generation failed (non-blocking): %s", e)
 
-        # ── 9. Return response ───────────────────────────────────
+        # ── 10. Return response ──────────────────────────────────
         return {
             "session_id": practice_session.id,
             "word_id": word.id,
@@ -184,6 +201,7 @@ async def asr_predict(
             "needs_focus": progress.needs_focus,
             "streak": today_streak.words_practiced_count,
             "gemini_suggestion": gemini_suggestion,
+            "feedback_audio": feedback_audio_data,
             "feedback_language": feedback_language,
         }
 

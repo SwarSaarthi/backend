@@ -21,9 +21,20 @@ from app.config import settings
 logger = logging.getLogger(__name__)
 
 # ── Supported Models (in priority order) ─────────────────────
+# Primary: Google Gemini active models (gemini-2.0-flash is current high-capacity flagship)
 GEMINI_MODELS = [
-    "gemini-3.5-flash",
-    "gemini-flash-latest",
+    'gemini-3.5-flash', 
+    'gemini-3.5-flash-lite', 
+    'gemini-3.8-flash', 
+    'gemini-3.7-flash'
+
+]
+
+# Secondary Fallback: Groq Cloud API (100% free tier, ultra-fast ~250ms LPU inference)
+GROQ_MODELS = [
+    "qwen/qwen3.8-27b",
+    "llama-3.3-70b-versatile",
+    "llama-3.1-8b-instant",
 ]
 
 # ── Clinical Hindi Articulation Map (for Fallback Coaching) ──
@@ -81,53 +92,54 @@ HINDI_ARTICULATION_GUIDE_HI: dict[str, dict[str, str]] = {
     "ह": {"place": "काकल्य वर्ण", "tongue": "मुंह को सामान्य खुला रखें और सीधे गले/छाती से गर्म हवा छोड़ें।"},
 }
 
-SYSTEM_INSTRUCTION_EN = """You are **SwarSaarthi AI Speech Coach** — an expert speech-language pathologist specializing in Hindi articulation therapy for speech-impaired individuals (dysarthria, stuttering, apraxia, and language learners).
+SYSTEM_INSTRUCTION_EN = """You are Mitra AI Speech Articulation Guide — an expert speech-language pathologist providing clinical articulation guidance for Hindi speech practice.
 
-Your goal is to provide warm, encouraging, clinically precise feedback comparing the learner's spoken attempt against the target word.
+Your goal is to provide clear, encouraging, clinically precise feedback comparing the learner's spoken attempt against the target word.
 
-Format your response cleanly with these three sections in simple English:
+Format your response cleanly with these three sections:
 
-🎯 **Analysis**
-A concise 1-2 sentence comparison. Identify the specific phonemes, matras, or conjuncts that were mispronounced, omitted, or substituted.
+Analysis
+A concise 1-2 sentence clinical observation. Identify the specific phonemes, matras, or sounds that were accurate, substituted, or need attention.
 
-👅 **Tongue & Mouth Placement**
-Provide clear, step-by-step physical positioning instructions for the target sounds:
-- Tongue position (e.g., dental against front teeth vs retroflex curled to palate)
-- Lip shape (rounded, spread, closed)
-- Airflow control (aspirated puff vs smooth breathing)
+Tongue & Mouth Placement
+Clear, step-by-step physical positioning instructions for the target sound:
+- Tongue position (e.g. tip against upper teeth vs retroflex curled toward palate)
+- Lip shape (rounded, open, relaxed)
+- Airflow control (smooth release vs aspirated puff)
 
-💡 **Practice Tip**
-Give 1 or 2 concrete exercises (e.g. syllable breakdown, minimal pair drill, or mirror practice) to master this sound.
+Practice Recommendation
+1 or 2 concrete exercises (e.g. syllable breakdown, mirror drill, or slow repetition).
 
 Guidelines:
-- Keep the total response under 120 words.
-- Write in simple English with Hindi letters highlighted in bold Devanagari (e.g., **'स'**, **'त'**).
-- If pronunciation was excellent (score >= 85%), celebrate their success and offer a tip for natural fluency.
+- Do NOT use emojis, decorative icons, or pictographs anywhere (e.g. no 🎯, 👅, 💡, ✨, 👉).
+- Keep total response under 110 words.
+- Write in clean, simple English with Hindi sounds in bold Devanagari (e.g. **'स'**, **'त'**).
+- If pronunciation was excellent (score >= 85%), highlight their success and suggest conversational practice.
 """
 
-SYSTEM_INSTRUCTION_HI = """आप **स्वर-सारथी एआई वाक्-कोच (Speech Coach)** हैं — एक विशेषज्ञ स्पीच-थेरेपिस्ट (Speech-Language Pathologist) जो वाणी दोष (dysarthria, हकलाहट, स्पष्ट उच्चारण की समस्या) वाले शिक्षार्थियों को हिंदी उच्चारण सुधारने में प्रशिक्षित करते हैं।
+SYSTEM_INSTRUCTION_HI = """आप मित्र AI (Mitra AI) वाक् उच्चारण मार्गदर्शक (Speech-Language Pathologist) हैं — जो वाणी अभ्यासकर्ताओं को हिंदी का शुद्ध और स्पष्ट उच्चारण सिखाते हैं।
 
-आपका कार्य शिक्षार्थी के बोले गए शब्द की सही शब्द से तुलना करके सरल, उत्साहवर्धक और चिकित्सकीय रूप से सटीक मार्गदर्शन देना है।
+शिक्षार्थी के बोले गए शब्द की सही शब्द से तुलना करके सरल, उत्साहवर्धक और चिकित्सकीय रूप से सटीक मार्गदर्शन प्रदान करें।
 
-अपनी प्रतिक्रिया को इन तीन अनुभागों में व्यवस्थित करें:
+अपनी प्रतिक्रिया को इन तीन अनुभागों में स्पष्ट रूप से व्यवस्थित करें:
 
-🎯 **विश्लेषण (Analysis)**
-1-2 सरल वाक्यों में बताएं कि शिक्षार्थी ने क्या बोला और क्या छूटा या बदला (जैसे अल्पप्राण/महाप्राण या मात्रा की त्रुटि)।
+विश्लेषण
+1-2 सरल वाक्यों में बताएं कि शिक्षार्थी ने क्या बोला और किस ध्वनि या मात्रा पर ध्यान देने की आवश्यकता है।
 
-👅 **जीभ और मुख की सही स्थिति (Tongue & Mouth Placement)**
+जीभ और मुख की स्थिति
 सही उच्चारण के लिए भौतिक स्थिति के स्पष्ट निर्देश दें:
-- जीभ की स्थिति (जैसे दंत्य: ऊपरी दांतों के पीछे, या मूर्धन्य: तालू से मुड़ी हुई)
-- होंठों का आकार (गोल, खुले, या बंद)
-- वायु-प्रवाह (हवा का हल्का झोंका या निरंतर सांस)
+- जीभ की स्थिति (जैसे दंत्य: ऊपरी दांतों के पीछे, या मूर्धन्य: तालू की ओर मुड़ी हुई)
+- होंठों का आकार (गोल, खुले, या शिथिल)
+- वायु-प्रवाह नियंत्रण (हवा का झोंका या नियंत्रित सांस)
 
-💡 **अभ्यास युक्ति (Practice Tip)**
-1 या 2 व्यावहारिक अभ्यास दें (जैसे शब्द को अक्षरों में तोड़ना या आईने के सामने दोहराना)।
+अभ्यास सुझाव
+1 या 2 व्यावहारिक अभ्यास (जैसे शब्द को अक्षरों में तोड़कर बोलना या आईने के सामने दोहराना)।
 
 दिशानिर्देश:
-- पूरी प्रतिक्रिया शुद्ध, सरल और मधुर **हिंदी (देवनागरी लिपि)** में होनी चाहिए।
-- कुल प्रतिक्रिया 120 शब्दों के अंदर रखें।
-- अत्यंत उत्साहवर्धक और धैर्यवान रहें।
-- यदि उच्चारण उत्कृष्ट हो (स्कोर >= 85%), तो प्रशंसा करें और धाराप्रवाह बोलने की युक्ति दें।
+- किसी भी प्रकार के इमोजी या सजावटी प्रतीक (जैसे 🎯, 👅, 💡, ✨, 👉) का प्रयोग बिल्कुल न करें।
+- पूरी प्रतिक्रिया शुद्ध, सरल और सहज हिंदी (देवनागरी लिपि) में होनी चाहिए।
+- कुल प्रतिक्रिया 110 शब्दों के अंदर रखें।
+- यदि उच्चारण उत्कृष्ट हो (स्कोर >= 85%), तो प्रशंसा करें और धाराप्रवाह बोलने का सुझाव दें।
 """
 
 
@@ -163,35 +175,90 @@ def _generate_rule_based_fallback(
     if is_hindi:
         if accuracy_score >= 85.0:
             return (
-                f"🎯 **विश्लेषण**: बहुत बढ़िया! आपने **{target_text}** का उच्चारण बहुत स्पष्ट और सटीक रूप से किया ({accuracy_score:.0f}%)।\n\n"
-                f"👅 **मुख की स्थिति**: आपकी जीभ और होंठों का तालमेल बिल्कुल सही था। सांस का प्रवाह सहज बनाए रखें।\n\n"
-                f"💡 **अभ्यास युक्ति**: **{target_text}** को पूरे वाक्य में 3 बार दोहराकर अभ्यास करें!"
+                f"विश्लेषण: बहुत बढ़िया! आपने '{target_text}' का उच्चारण अत्यंत स्पष्ट और सटीक रूप से किया ({accuracy_score:.0f}%)।\n\n"
+                f"जीभ और मुख की स्थिति: आपकी जीभ और होंठों का तालमेल बिल्कुल सही रहा। सांस का प्रवाह सहज बनाए रखें।\n\n"
+                f"अभ्यास सुझाव: '{target_text}' को पूरे वाक्य में 3 बार दोहराकर प्राकृतिक प्रवाह का अभ्यास करें।"
             )
         place = guide.get("place", "उच्चारण स्थान")
         tongue = guide.get("tongue", "हवा का प्रवाह संतुलित रखें और जीभ को स्थिर रखें।")
         spoken_display = f"'{user_spoken_text}'" if user_spoken_text else "मौन / अस्पष्ट"
         return (
-            f"🎯 **विश्लेषण**: आपकी सटीकता {accuracy_score:.0f}% रही। लक्ष्य शब्द **'{target_text}'** के लिए हमें {spoken_display} सुनाई दिया।\n\n"
-            f"👅 **'{focused_char or target_text}' के लिए जीभ की स्थिति** ({place}):\n"
+            f"विश्लेषण: आपकी सटीकता {accuracy_score:.0f}% रही। लक्ष्य शब्द '{target_text}' के लिए हमें {spoken_display} सुनाई दिया।\n\n"
+            f"'{focused_char or target_text}' के लिए जीभ की स्थिति ({place}):\n"
             f"{tongue}\n\n"
-            f"💡 **अभ्यास युक्ति**: शब्द को धीरे-धीरे अलग-अलग अक्षरों में बोलें, फिर एक साथ मिलाकर **{target_text}** का अभ्यास करें।"
+            f"अभ्यास सुझाव: शब्द को अक्षरों में तोड़कर बोलें, फिर एक साथ मिलाकर '{target_text}' का अभ्यास करें।"
         )
     else:
         if accuracy_score >= 85.0:
             return (
-                f"🎯 **Analysis**: Excellent pronunciation! You pronounced **{target_text}** clearly with great accuracy ({accuracy_score:.0f}%).\n\n"
-                f"👅 **Mouth Placement**: Your tongue and lip coordination were accurate. Maintain relaxed jaw movement and natural airflow.\n\n"
-                f"💡 **Practice Tip**: Try repeating **{target_text}** 3 times in a full sentence to practice conversational rhythm!"
+                f"Analysis: Excellent pronunciation! You pronounced '{target_text}' clearly with high accuracy ({accuracy_score:.0f}%).\n\n"
+                f"Tongue & Mouth Placement: Your tongue and lip coordination were accurate. Maintain relaxed jaw movement and natural airflow.\n\n"
+                f"Practice Recommendation: Try repeating '{target_text}' 3 times in a full sentence to practice conversational rhythm."
             )
         place = guide.get("place", "articulation point")
         tongue = guide.get("tongue", "Focus on releasing air steadily while keeping your tongue steady.")
         spoken_display = f"'{user_spoken_text}'" if user_spoken_text else "silence"
         return (
-            f"🎯 **Analysis**: You scored {accuracy_score:.0f}%. We heard {spoken_display} for the target **'{target_text}'**.\n\n"
-            f"👅 **Tongue Placement for '{focused_char or target_text}'** ({place}):\n"
+            f"Analysis: You scored {accuracy_score:.0f}%. We heard {spoken_display} for the target '{target_text}'.\n\n"
+            f"Tongue Placement for '{focused_char or target_text}' ({place}):\n"
             f"{tongue}\n\n"
-            f"💡 **Practice Tip**: Break the word down slowly: say each syllable separately, then blend them together into **{target_text}**."
+            f"Practice Recommendation: Break the word down slowly: pronounce each syllable separately, then blend them together into '{target_text}'."
         )
+
+
+async def _call_groq_feedback(
+    client: httpx.AsyncClient,
+    api_key: str,
+    system_instruction: str,
+    user_prompt: str,
+    feedback_lang: str,
+    target_text: str,
+) -> Optional[str]:
+    """
+    Query Groq Cloud API (Free LPU inference) as an ultra-fast secondary LLM fallback.
+    Groq provides 100% free API access with zero credit card required and ~250ms response times.
+    """
+    headers = {
+        "Authorization": f"Bearer {api_key.strip()}",
+        "Content-Type": "application/json",
+    }
+    for model in GROQ_MODELS:
+        payload = {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": system_instruction},
+                {"role": "user", "content": user_prompt},
+            ],
+            "temperature": 0.5,
+            "max_tokens": 420,
+        }
+        try:
+            res = await client.post(
+                "https://api.groq.com/openai/v1/chat/completions",
+                headers=headers,
+                json=payload,
+                timeout=7.0,
+            )
+            if res.status_code == 200:
+                data = res.json()
+                choices = data.get("choices", [])
+                if choices and "message" in choices[0]:
+                    content = choices[0]["message"].get("content", "").strip()
+                    if content:
+                        logger.info(
+                            "Groq feedback generated using model '%s' in language '%s' for '%s'",
+                            model, feedback_lang, target_text
+                        )
+                        return content
+            else:
+                logger.warning(
+                    "Groq model '%s' returned status %d: %s",
+                    model, res.status_code, res.text[:120]
+                )
+        except Exception as e:
+            logger.warning("Groq model '%s' attempt failed: %s", model, e)
+
+    return None
 
 
 async def generate_pronunciation_feedback(
@@ -203,14 +270,18 @@ async def generate_pronunciation_feedback(
     feedback_language: str = "en",
 ) -> str:
     """
-    Generate speech-therapy coaching feedback via Google Gemini API in user's chosen language.
-    Gracefully falls back to clinical rule-based feedback if network/API fails.
+    Generate speech-therapy coaching feedback with multi-tier LLM failover:
+    1. Primary: Google Gemini API (gemini-2.0-flash, gemini-1.5-flash, gemini-2.0-flash-lite)
+    2. Secondary Fallback: Groq Cloud API (llama-3.3-70b-versatile, llama-3.1-8b-instant)
+    3. Tertiary Fallback: Intelligent Clinical Rule-Based Engine (Zero-latency offline)
     """
-    api_key = settings.SWAR_GOOGLE_KEY or ""
+    gemini_key = (settings.SWAR_GOOGLE_KEY or "").strip()
+    groq_key = (settings.GROQ_API_KEY or "").strip()
     feedback_lang = "hi" if feedback_language.lower().startswith("hi") else "en"
 
-    if not api_key:
-        logger.info("No SWAR_GOOGLE_KEY configured; using clinical fallback.")
+    # If neither LLM key is configured, go straight to clinical rule-based feedback
+    if not gemini_key and not groq_key:
+        logger.info("No LLM API keys configured; using clinical fallback.")
         return _generate_rule_based_fallback(
             target_text, user_spoken_text, accuracy_score, cer, transliteration, feedback_lang
         )
@@ -234,48 +305,62 @@ async def generate_pronunciation_feedback(
             f"Please provide the full feedback in clear, simple English."
         )
 
-    payload = {
-        "system_instruction": {
-            "parts": [{"text": system_instruction}],
-        },
-        "contents": [
-            {"parts": [{"text": user_prompt}]},
-        ],
-        "generationConfig": {
-            "temperature": 0.5,
-            "maxOutputTokens": 450,
-        },
-    }
-
-    # Try supported models
-    timeout = httpx.Timeout(connect=6.0, read=16.0, write=6.0, pool=6.0)
+    timeout = httpx.Timeout(connect=3.0, read=5.0, write=4.0, pool=4.0)
     async with httpx.AsyncClient(timeout=timeout) as client:
-        for model in GEMINI_MODELS:
-            endpoint = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
-            try:
-                res = await client.post(endpoint, json=payload)
-                if res.status_code == 200:
-                    data = res.json()
-                    candidates = data.get("candidates", [])
-                    if candidates:
-                        parts = candidates[0].get("content", {}).get("parts", [])
-                        if parts and "text" in parts[0]:
-                            feedback = parts[0]["text"].strip()
-                            logger.info(
-                                "Gemini feedback generated using model '%s' in language '%s' for '%s'",
-                                model, feedback_lang, target_text
-                            )
-                            return feedback
-                else:
-                    logger.warning(
-                        "Gemini model '%s' returned status %d: %s",
-                        model, res.status_code, res.text[:120]
-                    )
-            except Exception as e:
-                logger.warning("Gemini model '%s' attempt failed: %s", model, e)
+        # ── Tier 1: Google Gemini Models ──────────────────────────────
+        if gemini_key:
+            payload = {
+                "system_instruction": {
+                    "parts": [{"text": system_instruction}],
+                },
+                "contents": [
+                    {"parts": [{"text": user_prompt}]},
+                ],
+                "generationConfig": {
+                    "temperature": 0.5,
+                    "maxOutputTokens": 450,
+                },
+            }
+            for model in GEMINI_MODELS:
+                endpoint = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={gemini_key}"
+                try:
+                    res = await client.post(endpoint, json=payload)
+                    if res.status_code == 200:
+                        data = res.json()
+                        candidates = data.get("candidates", [])
+                        if candidates:
+                            parts = candidates[0].get("content", {}).get("parts", [])
+                            if parts and "text" in parts[0]:
+                                feedback = parts[0]["text"].strip()
+                                logger.info(
+                                    "Gemini feedback generated using model '%s' in language '%s' for '%s'",
+                                    model, feedback_lang, target_text
+                                )
+                                return feedback
+                    else:
+                        logger.warning(
+                            "Gemini model '%s' returned status %d: %s",
+                            model, res.status_code, res.text[:120]
+                        )
+                except Exception as e:
+                    logger.warning("Gemini model '%s' attempt failed: %s", model, e)
 
-    # Fallback
-    logger.info("Using clinical fallback for '%s' in language '%s'", target_text, feedback_lang)
+        # ── Tier 2: Groq Cloud LLM Fallback (Llama-3.3-70B / Llama-3.1-8B) ──
+        if groq_key:
+            logger.info("Gemini models failed/unavailable. Attempting Groq secondary LLM fallback...")
+            groq_feedback = await _call_groq_feedback(
+                client=client,
+                api_key=groq_key,
+                system_instruction=system_instruction,
+                user_prompt=user_prompt,
+                feedback_lang=feedback_lang,
+                target_text=target_text,
+            )
+            if groq_feedback:
+                return groq_feedback
+
+    # ── Tier 3: Clinical Rule-Based Fallback ──────────────────────────
+    logger.info("All online LLMs exhausted or offline. Using clinical fallback for '%s' in '%s'", target_text, feedback_lang)
     return _generate_rule_based_fallback(
         target_text, user_spoken_text, accuracy_score, cer, transliteration, feedback_lang
     )

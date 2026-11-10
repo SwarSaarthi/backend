@@ -26,6 +26,9 @@ class Settings(BaseSettings):
     # ── Google Gemini API Key (for AI pronunciation feedback) ─
     SWAR_GOOGLE_KEY: str = ""
 
+    # ── Groq API Key (Free ultra-fast fallback LLM for live presentations) ──
+    GROQ_API_KEY: str = ""
+
     # ── CORS ──────────────────────────────────────────────────
     CORS_ORIGINS: list[str] = [ 
         "http://localhost:3000",

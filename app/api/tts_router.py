@@ -21,14 +21,14 @@ router = APIRouter(prefix="/api/tts", tags=["tts"])
 
 
 class TtsRequest(BaseModel):
-    text: str = Field(..., min_length=1, max_length=1000, description="Text to synthesize")
+    text: str = Field(..., min_length=1, max_length=3000, description="Text to synthesize")
     lang: str = Field("hi", description="Language code: 'hi' or 'en'")
     speed: float = Field(0.85, ge=0.5, le=1.5, description="Playback speed")
 
 
 @router.get("", summary="Synthesize speech (GET)")
 async def get_tts(
-    text: str = Query(..., min_length=1, max_length=500, description="Text to speak"),
+    text: str = Query(..., min_length=1, max_length=3000, description="Text to speak"),
     lang: str = Query("hi", description="Language: 'hi' or 'en'"),
     speed: float = Query(0.85, ge=0.5, le=1.5, description="Speed rate"),
 ):
