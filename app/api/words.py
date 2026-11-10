@@ -22,11 +22,14 @@ router = APIRouter(prefix="/api/words", tags=["words"])
 async def list_words(
     difficulty: str | None = Query(None, description="basic | intermediate | advanced"),
     category: str | None = Query(None),
+    item_type: str | None = Query(None, description="word | sentence"),
     limit: int = Query(20, ge=1, le=100),
     offset: int = Query(0, ge=0),
     db: AsyncSession = Depends(get_db),
 ):
     stmt = select(Word)
+    if item_type:
+        stmt = stmt.where(Word.item_type == item_type)
     if difficulty:
         stmt = stmt.where(Word.difficulty == difficulty)
     if category:
@@ -41,31 +44,42 @@ async def list_words(
 async def random_words(
     count: int = Query(10, ge=1, le=50),
     difficulty: str | None = Query(None),
+    item_type: str | None = Query(None, description="word | sentence"),
     db: AsyncSession = Depends(get_db),
 ):
-    """Return N randomly selected words."""
+    """Return N randomly selected items (words or sentences)."""
     stmt = select(Word)
+    if item_type:
+        stmt = stmt.where(Word.item_type == item_type)
     if difficulty:
         stmt = stmt.where(Word.difficulty == difficulty)
-    # Postgres random ordering
     stmt = stmt.order_by(func.random()).limit(count)
     result = await db.execute(stmt)
     return result.scalars().all()
 
 
 @router.get("/categories", response_model=list[str])
-async def list_categories(db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(Word.category).distinct().order_by(Word.category))
+async def list_categories(
+    item_type: str | None = Query(None),
+    db: AsyncSession = Depends(get_db),
+):
+    stmt = select(Word.category).distinct()
+    if item_type:
+        stmt = stmt.where(Word.item_type == item_type)
+    result = await db.execute(stmt.order_by(Word.category))
     return [row[0] for row in result.all()]
 
 
 @router.get("/count")
-async def word_counts(db: AsyncSession = Depends(get_db)):
-    """Return word counts grouped by difficulty."""
-    result = await db.execute(
-        select(Word.difficulty, func.count(Word.id))
-        .group_by(Word.difficulty)
-    )
+async def word_counts(
+    item_type: str | None = Query(None),
+    db: AsyncSession = Depends(get_db),
+):
+    """Return item counts grouped by difficulty."""
+    stmt = select(Word.difficulty, func.count(Word.id))
+    if item_type:
+        stmt = stmt.where(Word.item_type == item_type)
+    result = await db.execute(stmt.group_by(Word.difficulty))
     counts = {row[0]: row[1] for row in result.all()}
     counts["total"] = sum(counts.values())
     return counts

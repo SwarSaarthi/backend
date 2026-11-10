@@ -26,10 +26,10 @@ class Word(Base):
     id: Mapped[str] = mapped_column(
         String(36), primary_key=True, default=lambda: str(uuid.uuid4())
     )
-    text_hi: Mapped[str] = mapped_column(String(200), nullable=False, index=True)
-    transliteration: Mapped[str] = mapped_column(String(200), nullable=False)
-    meaning_en: Mapped[str] = mapped_column(String(300), nullable=False)
-    meaning_hi: Mapped[str] = mapped_column(String(300), nullable=False, default="")
+    text_hi: Mapped[str] = mapped_column(String(500), nullable=False, index=True)
+    transliteration: Mapped[str] = mapped_column(String(500), nullable=False)
+    meaning_en: Mapped[str] = mapped_column(String(500), nullable=False)
+    meaning_hi: Mapped[str] = mapped_column(String(500), nullable=False, default="")
     difficulty: Mapped[str] = mapped_column(
         Enum(Difficulty, name="difficulty_enum", create_constraint=True),
         nullable=False,
@@ -37,6 +37,9 @@ class Word(Base):
     )
     category: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
     audio_url: Mapped[str | None] = mapped_column(String(500), nullable=True, default=None)
+    item_type: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="word", server_default="word", index=True
+    )
 
 
 # ── Pydantic Schemas ─────────────────────────────────────────
@@ -50,6 +53,7 @@ class WordRead(BaseModel):
     difficulty: str
     category: str
     audio_url: str | None = None
+    item_type: str = "word"
 
     model_config = {"from_attributes": True}
 
@@ -58,5 +62,6 @@ class WordListParams(BaseModel):
     """Query parameters for filtering words."""
     difficulty: str | None = None
     category: str | None = None
+    item_type: str | None = None
     limit: int = 20
     offset: int = 0

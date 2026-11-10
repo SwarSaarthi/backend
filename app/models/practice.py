@@ -27,8 +27,8 @@ class PracticeSession(Base):
     word_id: Mapped[str] = mapped_column(
         String(36), ForeignKey("words.id", ondelete="CASCADE"), nullable=False, index=True
     )
-    target_text: Mapped[str] = mapped_column(String(200), nullable=False)
-    recognized_text: Mapped[str] = mapped_column(String(200), nullable=False, default="")
+    target_text: Mapped[str] = mapped_column(String(500), nullable=False)
+    recognized_text: Mapped[str] = mapped_column(String(500), nullable=False, default="")
     accuracy_score: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
     is_correct: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     phoneme_breakdown: Mapped[dict | None] = mapped_column(JSON, nullable=True, default=None)

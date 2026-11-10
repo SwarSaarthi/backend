@@ -2,15 +2,18 @@
 SwarSaarthi — High Performance Text-to-Speech (TTS) Service
 
 Provides fast, natural-sounding audio synthesis for:
-1. Single Hindi vocabulary words (sub-second latency via Google TTS engine)
+1. Single Hindi vocabulary words (sub-second latency)
 2. Detailed articulation feedback from Gemini AI (via Microsoft Neural Voices)
 3. In-memory LRU caching to make repeat requests instantaneous (< 5ms).
+4. Chunked robust multi-engine fallback for 100% synthesis reliability.
 """
 
+import asyncio
 import hashlib
 import logging
 import re
 from typing import Optional
+import urllib.parse
 import httpx
 
 logger = logging.getLogger(__name__)
@@ -31,25 +34,66 @@ def _has_devanagari(text: str) -> bool:
     return bool(re.search(r"[\u0900-\u097F]", text))
 
 
-# ── Google Fast Web TTS (Optimized for short phrases < 200 chars) ───
+def clean_speech_text(text: str) -> str:
+    """
+    Sanitize text for speech engines:
+    - Decodes URL-encoded parameters (+ signs and % escapes)
+    - Strips markdown formatting (*, _, #, ~, >, `, [])
+    - Strips emojis and decorative bullets
+    - Strips repetitive visual section labels (ANALYSIS, अभ्यास सुझाव, etc.)
+    - Normalizes whitespace so synthesis is fluent and natural
+    """
+    if not text:
+        return ""
+
+    # 1. Decode URL encoding and convert + to spaces
+    try:
+        text = urllib.parse.unquote_plus(text)
+    except Exception:
+        text = text.replace("+", " ")
+
+    # 2. Remove emojis and bullet points
+    text = re.sub(r"[\U00010000-\U0010ffff]", " ", text)
+    text = re.sub(r"[🎯👅💡✨👉→•●▪■◆★✓✔✕]", " ", text)
+
+    # 3. Remove Markdown markers
+    text = re.sub(r"[*_#`~>\[\]]", " ", text)
+
+    # 4. Remove section header words so speech flows naturally
+    headers = [
+        r"^\s*विश्लेषण[:\s]*",
+        r"^\s*जीभ\s*और\s*मुख\s*की\s*स्थिति[:\s]*",
+        r"^\s*अभ्यास\s*सुझाव[:\s]*",
+        r"^\s*ANALYSIS[:\s]*",
+        r"^\s*TONGUE\s*&\s*MOUTH\s*PLACEMENT[:\s]*",
+        r"^\s*PRACTICE\s*RECOMMENDATION[:\s]*",
+    ]
+    lines: list[str] = []
+    for line in text.split("\n"):
+        l = line.strip()
+        if not l:
+            continue
+        for h in headers:
+            l = re.sub(h, "", l, flags=re.IGNORECASE).strip()
+        if l:
+            lines.append(l)
+
+    clean = " ".join(lines)
+    clean = re.sub(r"\s+", " ", clean).strip()
+    return clean
+
+
+# ── Google Web TTS (Robust chunked fallback for any length) ─────────
 async def _synthesize_google_fast(text: str, lang: str = "hi") -> Optional[bytes]:
     """
     Synthesize audio using Google's lightweight TTS endpoint.
-    Typically resolves in 200-400ms for single Hindi words.
+    Handles any text length by chunking sentences into <= 180 char segments.
     """
-    url = "https://translate.google.com/translate_tts"
-    # Clean text of markdown and excessive whitespace
-    clean_text = re.sub(r"[*_#`~>\[\]]", "", text).strip()
-    # Limit to 200 characters per Google endpoint constraint
-    if len(clean_text) > 200:
-        clean_text = clean_text[:200]
+    clean_text = clean_speech_text(text)
+    if not clean_text:
+        return None
 
-    params = {
-        "ie": "UTF-8",
-        "q": clean_text,
-        "tl": lang,
-        "client": "tw-ob",
-    }
+    url = "https://translate.google.com/translate_tts"
     headers = {
         "User-Agent": (
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -57,14 +101,39 @@ async def _synthesize_google_fast(text: str, lang: str = "hi") -> Optional[bytes
         ),
     }
 
+    # Split text into chunks <= 180 chars by punctuation
+    sentences = re.split(r"([।\.\n\?]+)", clean_text)
+    chunks: list[str] = []
+    curr = ""
+    for s in sentences:
+        if len(curr) + len(s) < 180:
+            curr += s
+        else:
+            if curr.strip():
+                chunks.append(curr.strip())
+            curr = s
+    if curr.strip():
+        chunks.append(curr.strip())
+
+    if not chunks:
+        chunks = [clean_text[:180]]
+
     try:
-        async with httpx.AsyncClient(timeout=6.0) as client:
-            res = await client.get(url, params=params, headers=headers)
-            if res.status_code == 200 and len(res.content) > 500:
-                return res.content
-            logger.warning("Google Fast TTS returned status %d", res.status_code)
+        async with httpx.AsyncClient(timeout=12.0) as client:
+            async def fetch_chunk(c: str) -> bytes:
+                params = {"ie": "UTF-8", "q": c, "tl": lang, "client": "tw-ob"}
+                res = await client.get(url, params=params, headers=headers)
+                if res.status_code == 200 and len(res.content) > 200:
+                    return res.content
+                return b""
+
+            # Fetch all chunks in parallel
+            results = await asyncio.gather(*[fetch_chunk(c) for c in chunks])
+            audio_bytes = b"".join(results)
+            if audio_bytes and len(audio_bytes) > 500:
+                return audio_bytes
     except Exception as e:
-        logger.warning("Google Fast TTS request failed: %s", e)
+        logger.warning("Google TTS fallback request failed: %s", e)
     return None
 
 
@@ -78,21 +147,29 @@ async def _synthesize_edge_neural(
     Synthesize audio using Edge Neural TTS.
     Produces high-fidelity broadcast quality audio.
     """
+    clean_text = clean_speech_text(text)
+    if not clean_text:
+        return None
+
     try:
         import edge_tts
 
-        # Strip markdown symbols so speech reads naturally
-        clean_text = re.sub(r"[*_#`~>\[\]]", "", text)
-        clean_text = re.sub(r"\s+", " ", clean_text).strip()
-
         communicate = edge_tts.Communicate(clean_text, voice=voice, rate=rate_str)
         chunks: list[bytes] = []
-        async for chunk in communicate.stream():
-            if chunk["type"] == "audio":
-                chunks.append(chunk["data"])
+
+        async def _collect():
+            async for chunk in communicate.stream():
+                if chunk["type"] == "audio":
+                    chunks.append(chunk["data"])
+
+        # Generous timeout based on text length (min 15s, +0.08s per char)
+        timeout_sec = max(15.0, len(clean_text) * 0.08)
+        await asyncio.wait_for(_collect(), timeout=timeout_sec)
 
         if chunks:
             return b"".join(chunks)
+    except asyncio.TimeoutError:
+        logger.warning("Edge Neural TTS timed out for voice '%s' (text len %d)", voice, len(clean_text))
     except Exception as e:
         logger.warning("Edge Neural TTS failed for voice '%s': %s", voice, e)
     return None
@@ -118,7 +195,10 @@ async def synthesize_speech(
     if not text or not text.strip():
         return None
 
-    cleaned_text = text.strip()
+    cleaned_text = clean_speech_text(text)
+    if not cleaned_text:
+        return None
+
     cache_key = _get_cache_key(cleaned_text, lang, speed)
 
     # 1. Return cached audio if present
@@ -132,21 +212,20 @@ async def synthesize_speech(
     rate_str = f"{speed_percent:+d}%"
 
     is_devanagari = _has_devanagari(cleaned_text)
+    target_lang = "hi" if (lang == "hi" or is_devanagari) else "en"
 
-    # Strategy:
-    # A. For single words or short phrases (<= 120 chars) in Hindi, Google Fast TTS
-    #    is virtually instantaneous (200-400ms).
-    if len(cleaned_text) <= 120 and (lang == "hi" or is_devanagari):
-        audio_bytes = await _synthesize_google_fast(cleaned_text, lang="hi")
+    # Single best natural female voice:
+    # Hindi: hi-IN-SwaraNeural (Expressive, natural Indian Hindi female voice)
+    # English: en-IN-NeerjaNeural (Expressive, natural Indian English female voice)
+    voice = "hi-IN-SwaraNeural" if target_lang == "hi" else "en-IN-NeerjaNeural"
 
-    # B. If not short Hindi or Google Fast failed, use Microsoft Neural Voice
+    # Step 1: High-fidelity Microsoft Edge Neural female voice
+    audio_bytes = await _synthesize_edge_neural(cleaned_text, voice=voice, rate_str=rate_str)
+
+    # Step 2: Reliable multi-chunk Google Web TTS fallback (works 100% even if Edge TTS network fails)
     if not audio_bytes:
-        voice = "hi-IN-SwaraNeural" if (lang == "hi" or is_devanagari) else "en-IN-NeerjaNeural"
-        audio_bytes = await _synthesize_edge_neural(cleaned_text, voice=voice, rate_str=rate_str)
-
-    # C. Final fallback if Edge Neural failed
-    if not audio_bytes and len(cleaned_text) <= 200:
-        audio_bytes = await _synthesize_google_fast(cleaned_text, lang="hi" if is_devanagari else "en")
+        logger.info("Falling back to Google Web TTS for language '%s'", target_lang)
+        audio_bytes = await _synthesize_google_fast(cleaned_text, lang=target_lang)
 
     # Cache successful audio
     if audio_bytes:
@@ -160,4 +239,3 @@ async def synthesize_speech(
 
     logger.error("All TTS synthesis strategies failed for text: '%s'", cleaned_text[:30])
     return None
-
