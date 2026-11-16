@@ -12,7 +12,7 @@ import uuid
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.session import async_session_factory, engine
-from app.models.base import Base
+from app.db.schema import create_schema
 from app.models.word import Word
 
 WORDS_DATA = [
@@ -588,8 +588,7 @@ WORDS_DATA = [
 
 async def seed_words():
     """Seed the database with all words if not already present."""
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+    await create_schema(engine)
 
     async with async_session_factory() as db:
         # Check existing count

@@ -7,10 +7,13 @@ Provides structured Hindi practice sentences across three clinical difficulty ti
 - 'advanced': Clinical articulation targets with Sanskrit tatsama clusters, retroflexes, aspirates, literature & philosophy
 """
 
-import os
-import sys
-import uuid
-import sqlite3
+import asyncio
+
+from sqlalchemy import select
+
+from app.db.session import async_session_factory, engine
+from app.db.schema import create_schema
+from app.models.word import Word
 
 SENTENCES_DATA = [
     # ═════════════════════════════════════════════════════════════════════════
@@ -347,80 +350,31 @@ SENTENCES_DATA = [
 ]
 
 
-def seed_sentences_sqlite():
-    db_paths = [
-        "backend/swarsaarthi.db",
-        "swarsaarthi.db",
-    ]
-    
-    for db_path in db_paths:
-        if not os.path.exists(db_path):
-            continue
-        print(f"Seeding database at: {db_path}")
-        conn = sqlite3.connect(db_path)
-        cur = conn.cursor()
+async def seed_sentences():
+    """Idempotently seed sentences using the configured SQLite or PostgreSQL database."""
+    await create_schema(engine)
 
-        # Check and add item_type column
-        cols = [c[1] for c in cur.execute("PRAGMA table_info(words)").fetchall()]
-        if "item_type" not in cols:
-            print("Adding 'item_type' column...")
-            cur.execute("ALTER TABLE words ADD COLUMN item_type VARCHAR(20) DEFAULT 'word'")
-            conn.commit()
-
-        # Ensure all existing words have item_type = 'word'
-        cur.execute("UPDATE words SET item_type = 'word' WHERE item_type IS NULL")
-        conn.commit()
-
+    async with async_session_factory() as db:
+        result = await db.execute(
+            select(Word).where(Word.text_hi.in_([item["text_hi"] for item in SENTENCES_DATA]))
+        )
+        existing = {word.text_hi: word for word in result.scalars()}
         inserted = 0
-        updated = 0
         for item in SENTENCES_DATA:
-            cur.execute("SELECT id FROM words WHERE text_hi = ?", (item["text_hi"],))
-            row = cur.fetchone()
-            if row:
-                cur.execute(
-                    """
-                    UPDATE words 
-                    SET transliteration = ?, meaning_en = ?, meaning_hi = ?, 
-                        difficulty = ?, category = ?, item_type = 'sentence'
-                    WHERE id = ?
-                    """,
-                    (
-                        item["transliteration"],
-                        item["meaning_en"],
-                        item["meaning_hi"],
-                        item["difficulty"],
-                        item["category"],
-                        row[0],
-                    ),
-                )
-                updated += 1
-            else:
-                cur.execute(
-                    """
-                    INSERT INTO words (id, text_hi, transliteration, meaning_en, meaning_hi, difficulty, category, item_type)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, 'sentence')
-                    """,
-                    (
-                        str(uuid.uuid4()),
-                        item["text_hi"],
-                        item["transliteration"],
-                        item["meaning_en"],
-                        item["meaning_hi"],
-                        item["difficulty"],
-                        item["category"],
-                    ),
-                )
+            word = existing.get(item["text_hi"])
+            if word is None:
+                word = Word(**item, item_type="sentence")
+                db.add(word)
+                existing[item["text_hi"]] = word
                 inserted += 1
+            else:
+                for field, value in item.items():
+                    setattr(word, field, value)
+                word.item_type = "sentence"
 
-        conn.commit()
-        
-        # Verify counts
-        word_count = cur.execute("SELECT COUNT(*) FROM words WHERE item_type = 'word'").fetchone()[0]
-        sentence_count = cur.execute("SELECT COUNT(*) FROM words WHERE item_type = 'sentence'").fetchone()[0]
-        print(f"Finished {db_path}: {inserted} inserted, {updated} updated.")
-        print(f"Current DB totals -> Words: {word_count}, Sentences: {sentence_count}")
-        conn.close()
+        await db.commit()
+        print(f"[+] Sentence seeding complete! Added {inserted} sentences.")
 
 
 if __name__ == "__main__":
-    seed_sentences_sqlite()
+    asyncio.run(seed_sentences())

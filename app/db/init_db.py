@@ -6,21 +6,21 @@ and seeds initial vocabulary dataset.
 """
 
 import asyncio
-import sys
 from app.db.session import engine
-from app.models.base import Base
-import app.models  # Register all models with Base.metadata
+from app.db.schema import create_schema
 from app.db.seed_words import seed_words
+from app.db.seed_sentences import seed_sentences
 
 
 async def init_db():
     print("[*] Initializing database tables...")
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+    await create_schema(engine)
     print("[+] Tables initialized successfully.")
 
     print("[*] Running word dataset seed...")
     await seed_words()
+    print("[*] Running sentence dataset seed...")
+    await seed_sentences()
     print("[+] Database ready!")
 
 

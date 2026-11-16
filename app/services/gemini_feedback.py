@@ -17,6 +17,7 @@ from typing import Optional
 import httpx
 
 from app.config import settings
+from app.services.feedback_language import coaching_matches_language
 
 logger = logging.getLogger(__name__)
 
@@ -112,7 +113,7 @@ Practice Recommendation
 
 Guidelines:
 - Do NOT use emojis, decorative icons, or pictographs anywhere (e.g. no 🎯, 👅, 💡, ✨, 👉).
-- Keep total response under 110 words.
+- Give complete, useful guidance in all three sections. Avoid repetition; do not shorten an explanation just to meet a word count.
 - Write in clean, simple English with Hindi sounds in bold Devanagari (e.g. **'स'**, **'त'**).
 - If pronunciation was excellent (score >= 85%), highlight their success and suggest conversational practice.
 """
@@ -138,7 +139,7 @@ SYSTEM_INSTRUCTION_HI = """आप मित्र AI (Mitra AI) वाक् उ
 दिशानिर्देश:
 - किसी भी प्रकार के इमोजी या सजावटी प्रतीक (जैसे 🎯, 👅, 💡, ✨, 👉) का प्रयोग बिल्कुल न करें।
 - पूरी प्रतिक्रिया शुद्ध, सरल और सहज हिंदी (देवनागरी लिपि) में होनी चाहिए।
-- कुल प्रतिक्रिया 110 शब्दों के अंदर रखें।
+- तीनों अनुभागों में पूरा और उपयोगी मार्गदर्शन दें। अनावश्यक दोहराव से बचें; शब्द सीमा के लिए निर्देश अधूरे न छोड़ें। अंग्रेज़ी वाक्य या रोमन लिपि में हिंदी न लिखें।
 - यदि उच्चारण उत्कृष्ट हो (स्कोर >= 85%), तो प्रशंसा करें और धाराप्रवाह बोलने का सुझाव दें।
 """
 
@@ -149,7 +150,7 @@ def _generate_rule_based_fallback(
     accuracy_score: float,
     cer: float,
     transliteration: str = "",
-    feedback_language: str = "en",
+    feedback_language: str = "hi",
 ) -> str:
     """
     Intelligent clinical fallback when Gemini API is unavailable or offline.
@@ -230,7 +231,7 @@ async def _call_groq_feedback(
                 {"role": "user", "content": user_prompt},
             ],
             "temperature": 0.5,
-            "max_tokens": 420,
+            "max_tokens": 2048,
         }
         try:
             res = await client.post(
@@ -244,7 +245,7 @@ async def _call_groq_feedback(
                 choices = data.get("choices", [])
                 if choices and "message" in choices[0]:
                     content = choices[0]["message"].get("content", "").strip()
-                    if content:
+                    if choices[0].get("finish_reason") == "stop" and coaching_matches_language(content, feedback_lang):
                         logger.info(
                             "Groq feedback generated using model '%s' in language '%s' for '%s'",
                             model, feedback_lang, target_text
@@ -267,7 +268,7 @@ async def generate_pronunciation_feedback(
     accuracy_score: float,
     cer: float,
     transliteration: str = "",
-    feedback_language: str = "en",
+    feedback_language: str = "hi",
 ) -> str:
     """
     Generate speech-therapy coaching feedback with multi-tier LLM failover:
@@ -318,7 +319,7 @@ async def generate_pronunciation_feedback(
                 ],
                 "generationConfig": {
                     "temperature": 0.5,
-                    "maxOutputTokens": 450,
+                    "maxOutputTokens": 2048,
                 },
             }
             for model in GEMINI_MODELS:
@@ -330,8 +331,10 @@ async def generate_pronunciation_feedback(
                         candidates = data.get("candidates", [])
                         if candidates:
                             parts = candidates[0].get("content", {}).get("parts", [])
-                            if parts and "text" in parts[0]:
-                                feedback = parts[0]["text"].strip()
+                            if parts and candidates[0].get("finishReason") == "STOP":
+                                feedback = "\n".join(part.get("text", "") for part in parts if not part.get("thought")).strip()
+                                if not coaching_matches_language(feedback, feedback_lang):
+                                    continue
                                 logger.info(
                                     "Gemini feedback generated using model '%s' in language '%s' for '%s'",
                                     model, feedback_lang, target_text

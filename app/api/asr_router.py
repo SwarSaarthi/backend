@@ -12,6 +12,7 @@ import tempfile
 import logging
 import base64
 from datetime import date, datetime, timezone
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, status
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -24,6 +25,7 @@ from app.models.word import Word
 from app.models.practice import PracticeSession, UserWordProgress, UserStreak
 from app.services.asr import predict_audio, analyze_pronunciation, is_model_loaded
 from app.services.gemini_feedback import generate_pronunciation_feedback
+from app.services.feedback_language import feedback_summary
 from app.services.tts_service import synthesize_speech
 
 logger = logging.getLogger(__name__)
@@ -35,7 +37,7 @@ router = APIRouter(prefix="/api/asr", tags=["asr"])
 async def asr_predict(
     audio: UploadFile = File(..., description="Audio recording (WebM/WAV/OGG)"),
     word_id: str = Form(..., description="Target word UUID from the words table"),
-    feedback_language: str = Form("en", description="Feedback language: 'en' or 'hi'"),
+    feedback_language: Literal["hi", "en"] = Form("hi", description="Feedback language: 'en' or 'hi'"),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -196,7 +198,7 @@ async def asr_predict(
                 "feedback_tier",
                 "excellent" if is_correct else ("almost_there" if accuracy >= 50.0 else "needs_improvement")
             ),
-            "feedback": analysis["feedback"],
+            "feedback": feedback_summary(analysis, feedback_language),
             "details": analysis["details"],
             "needs_focus": progress.needs_focus,
             "streak": today_streak.words_practiced_count,

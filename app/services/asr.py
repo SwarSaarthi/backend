@@ -28,15 +28,16 @@ Pipeline:
 import os
 import logging
 import tempfile
-import subprocess
 from typing import Optional
 import numpy as np
 
 import torch
-import torchaudio
+
+# This service uses PyTorch only; avoid importing an unrelated TensorFlow install.
+os.environ.setdefault("USE_TF", "0")
 
 from transformers import (
-    AutoProcessor,
+    Wav2Vec2Processor,
     AutoModelForCTC,
     WhisperProcessor,
     WhisperForConditionalGeneration,
@@ -72,7 +73,7 @@ TARGET_SAMPLE_RATE = 16_000
 # Singleton Model State
 # ---------------------------------------------------------
 
-_processor: Optional[AutoProcessor] = None
+_processor: Optional[Wav2Vec2Processor] = None
 _model: Optional[AutoModelForCTC] = None
 _whisper_processor: Optional[WhisperProcessor] = None
 _whisper_model: Optional[WhisperForConditionalGeneration] = None
@@ -87,8 +88,7 @@ _model_loaded = False
 
 def load_model() -> None:
     """
-    Load the IndicWav2Vec Hindi model (primary) and
-    pre-load the OpenAI Whisper model (fallback).
+    Load the IndicWav2Vec Hindi model. Whisper loads only if fallback is needed.
     """
 
     global _processor
@@ -164,14 +164,14 @@ def load_model() -> None:
 
     if hf_token:
 
-        _processor = AutoProcessor.from_pretrained(
+        _processor = Wav2Vec2Processor.from_pretrained(
             MODEL_ID,
             token=hf_token
         )
 
     else:
 
-        _processor = AutoProcessor.from_pretrained(
+        _processor = Wav2Vec2Processor.from_pretrained(
             MODEL_ID
         )
 
@@ -208,17 +208,6 @@ def load_model() -> None:
     # -----------------------------------------------------
 
     _model.eval()
-
-    # Pre-load Whisper fallback model
-    try:
-        logger.info("Loading fallback Whisper model (%s)...", FALLBACK_MODEL_ID)
-        _whisper_processor = WhisperProcessor.from_pretrained(FALLBACK_MODEL_ID)
-        _whisper_model = WhisperForConditionalGeneration.from_pretrained(FALLBACK_MODEL_ID)
-        _whisper_model.to(_device)
-        _whisper_model.eval()
-        logger.info("Fallback Whisper model ready on %s", _device)
-    except Exception as e:
-        logger.warning("Could not pre-load Whisper fallback: %s", e)
 
     _model_loaded = True
 
@@ -380,10 +369,8 @@ def predict_audio(audio_path: str) -> str:
     """
     Run IndicWav2Vec inference and return Hindi text.
 
-    Uses direct CTC greedy decoding from model logits.
-    We intentionally do NOT use processor.batch_decode()
-    because this model's processor contains a pyctcdecode
-    language-model decoder with a vocabulary mismatch.
+    Uses direct CTC greedy decoding from model logits and a plain Wav2Vec2
+    processor, without the unused language-model decoder dependency.
     """
 
     if (
@@ -423,35 +410,10 @@ def predict_audio(audio_path: str) -> str:
         if data.ndim == 2:
             data = data.mean(axis=1)
 
-        # -------------------------------------------------
-        # NumPy -> Torch
-        # -------------------------------------------------
-
-        waveform = torch.from_numpy(
-            data
-        ).float()
-
-        # -------------------------------------------------
-        # Resample -> 16 kHz
-        # -------------------------------------------------
-
+        # PyAV already resamples to 16 kHz in convert_to_wav().
         if sample_rate != TARGET_SAMPLE_RATE:
-
-            resampler = torchaudio.transforms.Resample(
-                orig_freq=sample_rate,
-                new_freq=TARGET_SAMPLE_RATE
-            )
-
-            waveform = resampler(
-                waveform
-            )
-
-        # -------------------------------------------------
-        # Tensor -> NumPy
-        # -------------------------------------------------
-
-        audio = waveform.squeeze().numpy()
-        import numpy as np
+            raise RuntimeError("Audio conversion did not produce a 16 kHz waveform")
+        audio = np.asarray(data, dtype=np.float32).reshape(-1)
 
         max_amp = float(np.max(np.abs(audio))) if len(audio) > 0 else 0.0
         rms = float(np.sqrt(np.mean(audio**2))) if len(audio) > 0 else 0.0
