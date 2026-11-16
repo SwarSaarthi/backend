@@ -97,6 +97,7 @@ async def get_focus_words(
     for prog, word in rows:
         items.append({
             "word_id": word.id,
+            "item_type": word.item_type,
             "text_hi": word.text_hi,
             "transliteration": word.transliteration,
             "meaning_en": word.meaning_en,
